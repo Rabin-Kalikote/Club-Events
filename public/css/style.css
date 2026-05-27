@@ -710,6 +710,7 @@ body {
   .clubs-grid { grid-template-columns: repeat(2, 1fr); }
   .day-col { min-width: 80px; }
   .clubs-filter input { width: 100%; }
-  /* Hide calendar title only on small phones */
+  /* Hide calendar title and view toggle on small phones */
   #cal-title { display: none !important; }
+  .view-toggle { display: none !important; }
 }
