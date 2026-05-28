@@ -14,9 +14,9 @@ export async function onRequestGet({ env, params }) {
   const { id } = params;
   try {
     const event = await env.DB.prepare(
-      `SELECT e.*, c.name AS club_name, l.name AS location_name
+      `SELECT e.*, d.name AS department_name, l.name AS location_name
        FROM events e
-       JOIN clubs c ON e.club_id = c.id
+       JOIN departments d ON e.department_id = d.id
        LEFT JOIN locations l ON e.location_id = l.id
        WHERE e.id = ?`
     ).bind(id).first();
@@ -35,8 +35,12 @@ export async function onRequestPut({ env, request, params, data }) {
   const event = await env.DB.prepare('SELECT * FROM events WHERE id = ?').bind(id).first();
   if (!event) return json({ error: 'Event not found' }, 404);
 
-  if (user.type === 'club' && user.club_id !== event.club_id) {
-    return json({ error: 'Forbidden' }, 403);
+  // Allow department-level users to manage their own events
+  const userDeptId = user.department_id || user.club_id;
+  if (user.type === 'club' || user.type === 'department') {
+    if (userDeptId !== event.department_id) {
+      return json({ error: 'Forbidden' }, 403);
+    }
   }
 
   let body;
@@ -68,8 +72,11 @@ export async function onRequestDelete({ env, params, data }) {
   const event = await env.DB.prepare('SELECT * FROM events WHERE id = ?').bind(id).first();
   if (!event) return json({ error: 'Event not found' }, 404);
 
-  if (user.type === 'club' && user.club_id !== event.club_id) {
-    return json({ error: 'Forbidden' }, 403);
+  const userDeptId2 = user.department_id || user.club_id;
+  if (user.type === 'club' || user.type === 'department') {
+    if (userDeptId2 !== event.department_id) {
+      return json({ error: 'Forbidden' }, 403);
+    }
   }
 
   try {

@@ -12,6 +12,8 @@ const state = {
   calAnchorDate: new Date(),  // reference date for calendar view
   events: [],
   clubs: [],
+  departments: [],
+  selectedDepartmentId: null,
   loggedInClub: null,   // { id, name, token }
   adminToken: null,
   pendingLoginClub: null,  // club object waiting for password
@@ -45,7 +47,7 @@ function navigate(page) {
   state.currentPage = page;
 
   if (page === 'home') renderCalendar();
-  if (page === 'clubs') loadClubs();
+  if (page === 'departments') loadDepartmentsPage();
   if (page === 'senate') renderSenatePage();
 }
 
@@ -70,6 +72,20 @@ function formatDateTimeLocal(dt) {
   // "YYYY-MM-DDTHH:MM" for datetime-local input
   const pad = n => String(n).padStart(2, '0');
   return `${dt.getFullYear()}-${pad(dt.getMonth()+1)}-${pad(dt.getDate())}T${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
+}
+
+// Parse an ISO-like datetime string as local time (handles 'YYYY-MM-DDTHH:MM' etc.)
+function parseLocalISO(s) {
+  if (!s) return new Date(NaN);
+  // If there's an explicit timezone, let Date handle it
+  if (/[zZ]|[+-][0-9]{2}:?[0-9]{2}$/.test(s)) return new Date(s);
+  const [datePart, timePart='00:00:00'] = String(s).split('T');
+  const [y, m, d] = datePart.split('-').map(n => parseInt(n, 10));
+  const t = timePart.split(':');
+  const hh = parseInt(t[0]||0, 10);
+  const mm = parseInt(t[1]||0, 10);
+  const ss = t[2] ? parseInt(t[2].split('.')[0]||0, 10) : 0;
+  return new Date(y, (m || 1) - 1, d || 1, hh, mm, ss);
 }
 
 function startOfDay(d) {
@@ -98,6 +114,41 @@ const PALETTE = [
 ];
 function eventColor(clubId) {
   return PALETTE[(clubId % PALETTE.length)];
+}
+
+/** Department color mapping (assign colors from PALETTE) */
+function assignDepartmentColors(depts) {
+  const map = {};
+  depts.forEach((d, i) => { map[d.id] = PALETTE[i % PALETTE.length]; });
+  return map;
+}
+
+// Cluster/overlap helpers
+// state._clusterIndex stores the currently visible index for a given cluster id
+state._clusterIndex = state._clusterIndex || {};
+
+function clusterDayEvents(eventsForDay) {
+  if (!eventsForDay || !eventsForDay.length) return [];
+  // eventsForDay should be an array of events with parsed start/end mins
+  const evs = eventsForDay.slice().sort((a,b) => (a._startMin - b._startMin) || (b._endMin - a._endMin));
+  const clusters = [];
+  let cur = { events: [], start: Infinity, end: -Infinity };
+  for (const ev of evs) {
+    if (cur.events.length === 0) {
+      cur.events.push(ev); cur.start = ev._startMin; cur.end = ev._endMin;
+      continue;
+    }
+    // if overlaps (start < current end) then same cluster
+    if (ev._startMin < cur.end) {
+      cur.events.push(ev);
+      cur.end = Math.max(cur.end, ev._endMin);
+    } else {
+      clusters.push(cur);
+      cur = { events: [ev], start: ev._startMin, end: ev._endMin };
+    }
+  }
+  if (cur.events.length) clusters.push(cur);
+  return clusters;
 }
 
 /** Show an inline alert */
@@ -152,7 +203,9 @@ const MONTHS = ['January','February','March','April','May','June',
                 'July','August','September','October','November','December'];
 
 async function fetchEvents(startISO, endISO) {
-  const { ok, data } = await apiFetch(`/api/events?start=${startISO}&end=${endISO}`);
+  // Optionally filter by department (club_id) if selected
+  const deptParam = state.selectedDepartmentId ? `&club_id=${state.selectedDepartmentId}` : '';
+  const { ok, data } = await apiFetch(`/api/events?start=${startISO}&end=${endISO}${deptParam}`);
   return ok ? data.events || [] : [];
 }
 
@@ -180,7 +233,7 @@ async function renderCalendar() {
     setViewToggleActive('week');
   }
 
-  // Update title
+  // Update title (will include event count after we fetch events below)
   const title = document.getElementById('cal-title');
   if (days.length === 1) {
     title.textContent = fmt(days[0], { weekday:'long', month:'long', day:'numeric', year:'numeric' });
@@ -194,6 +247,21 @@ async function renderCalendar() {
   const rangeStart = isoLocal(days[0]);
   const rangeEnd   = isoLocal(addDays(days[days.length - 1], 1));
   const events = await fetchEvents(rangeStart, rangeEnd);
+
+  // Debug: surface how many events we fetched and their datetimes
+  try {
+    console.debug('[renderCalendar] range', rangeStart, rangeEnd, 'fetched', events.length, 'events');
+    console.debug('[renderCalendar] datetimes', events.map(e => e.start_datetime));
+  } catch (err) { /* ignore logging errors */ }
+
+  // Update title to include event count for quick verification
+  if (days.length === 1) {
+    title.textContent = fmt(days[0], { weekday:'long', month:'long', day:'numeric', year:'numeric' }) + ` — ${events.length} event${events.length !== 1 ? 's' : ''}`;
+  } else {
+    const s = fmt(days[0], { month:'short', day:'numeric' });
+    const e = fmt(days[6], { month:'short', day:'numeric', year:'numeric' });
+    title.textContent = `${s} – ${e}` + ` — ${events.length} event${events.length !== 1 ? 's' : ''}`;
+  }
 
   // Build grid HTML
   const today = startOfDay(new Date());
@@ -210,11 +278,11 @@ async function renderCalendar() {
   html += `<div class="days-wrap">`;
   days.forEach(day => {
     const isToday = day.getTime() === today.getTime();
-    const dayEvents = events.filter(ev => {
-      const evStart = new Date(ev.start_datetime);
-      const evDay = startOfDay(evStart);
-      return evDay.getTime() === day.getTime();
-    });
+      const dayEvents = events.filter(ev => {
+        const evStart = parseLocalISO(ev.start_datetime);
+        const evDay = startOfDay(evStart);
+        return evDay.getTime() === day.getTime();
+      });
 
     html += `<div class="day-col">`;
     // header moved into #days-headers; reserve body space here
@@ -234,27 +302,75 @@ async function renderCalendar() {
       html += `<div class="now-line" style="top:${topPx}px"></div>`;
     }
 
-    // Event blocks
-    dayEvents.forEach(ev => {
-      const start = new Date(ev.start_datetime);
-      const end   = new Date(ev.end_datetime);
+    // Event blocks: compute minute offsets and cluster overlapping events
+    const prepared = dayEvents.map(ev => {
+      const start = parseLocalISO(ev.start_datetime);
+      const end   = parseLocalISO(ev.end_datetime);
       const startMin = start.getHours() * 60 + start.getMinutes();
       const endMin   = end.getHours() * 60 + end.getMinutes();
-      const duration = Math.max(endMin - startMin, 15); // min 15-min visual height for readability
+      return Object.assign({}, ev, { _startMin: startMin, _endMin: endMin, _startDate: start, _endDate: end });
+    });
 
-      const topPx    = startMin * (HOUR_H / 60);
-      const heightPx = duration * (HOUR_H / 60);
-      const color = eventColor(ev.club_id);
-      const timeStr = `${fmt(start,{hour:'numeric',minute:'2-digit'})} – ${fmt(end,{hour:'numeric',minute:'2-digit'})}`;
+    const clusters = clusterDayEvents(prepared);
+    clusters.forEach((cluster, ci) => {
+      // determine a single render slot extents
+      const slotStart = Math.min(...cluster.events.map(e => e._startMin));
+      const slotEnd   = Math.max(...cluster.events.map(e => e._endMin));
+      const slotTopPx = slotStart * (HOUR_H / 60);
+      const slotHeightPx = Math.max((slotEnd - slotStart) * (HOUR_H / 60), 10);
 
-      html += `<div class="cal-event"
-          style="top:${topPx}px;height:${heightPx}px;background:${color};color:#fff"
-          data-ev-id="${ev.id}"
-          title="${escHtml(ev.title)} · ${escHtml(timeStr)}">
-        <div class="ev-title">${escHtml(ev.title)}</div>
-        <div class="ev-location">${escHtml(ev.location_name || '')}</div>
-        <div class="ev-club">${escHtml(ev.club_name || '')}</div>
-      </div>`;
+      // attach a cluster id
+      const clusterId = `c-${day.toISOString().slice(0,10)}-${ci}`;
+      cluster.id = clusterId;
+      // ensure index persisted
+      if (!state._clusterIndex) state._clusterIndex = {};
+      if (state._clusterIndex[clusterId] == null) state._clusterIndex[clusterId] = 0;
+
+  // determine if all events have start/end within a small tolerance (10 minutes)
+  const TOL_MIN = 10; // minutes
+  const sameSlot = cluster.events.every(e => (Math.abs(e._startMin - slotStart) <= TOL_MIN && Math.abs(e._endMin - slotEnd) <= TOL_MIN));
+
+      // store cluster length for nav handlers
+      state._clusterLen = state._clusterLen || {};
+      state._clusterLen[clusterId] = cluster.events.length;
+
+      if (sameSlot && cluster.events.length > 1) {
+        // carousel slot - only render the visible event for the cluster
+        const len = cluster.events.length;
+        const rawIdx = state._clusterIndex[clusterId] || 0;
+        const visibleIdx = ((rawIdx % len) + len) % len; // normalize positive modulo
+        const ev = cluster.events[visibleIdx];
+        const start = ev._startDate; const end = ev._endDate;
+        const timeStr = `${fmt(start,{hour:'numeric',minute:'2-digit'})} – ${fmt(end,{hour:'numeric',minute:'2-digit'})}`;
+        const deptForColor = ev.department_id || ev.club_id || 0;
+        const color = (state.departmentColors && state.departmentColors[deptForColor]) || eventColor(deptForColor);
+        html += `<div class="cal-event" style="top:${slotTopPx}px;height:${slotHeightPx}px;background:${color};color:#fff" data-ev-id="${ev.id}" data-cluster="${clusterId}" title="${escHtml(ev.title)} · ${escHtml(timeStr)}">
+            <div class="ev-title">${escHtml(ev.title)}</div>
+            <div class="ev-location">${escHtml(ev.location_name || '')}</div>
+            <div class="ev-club">${escHtml(ev.club_name || '')}</div>
+            <div class="ev-nav">
+              <button class="ev-nav-prev" data-cluster-prev="${clusterId}">◀</button>
+              <span class="ev-nav-counter">${visibleIdx+1}/${len}</span>
+              <button class="ev-nav-next" data-cluster-next="${clusterId}">▶</button>
+            </div>
+          </div>`;
+      } else {
+        // render each event as normal blocks (even if overlapping) so they keep their proper top/height
+        cluster.events.forEach((ev) => {
+          const start = ev._startDate; const end = ev._endDate;
+          const startMin = ev._startMin; const endMin = ev._endMin;
+          const topPx = startMin * (HOUR_H / 60);
+          const heightPx = Math.max((endMin - startMin) * (HOUR_H / 60), 12);
+          const deptForColor = ev.department_id || ev.club_id || 0;
+          const color = (state.departmentColors && state.departmentColors[deptForColor]) || eventColor(deptForColor);
+          const timeStr = `${fmt(start,{hour:'numeric',minute:'2-digit'})} – ${fmt(end,{hour:'numeric',minute:'2-digit'})}`;
+          html += `<div class="cal-event" style="top:${topPx}px;height:${heightPx}px;background:${color};color:#fff" data-ev-id="${ev.id}" data-cluster="${clusterId}" title="${escHtml(ev.title)} · ${escHtml(timeStr)}">
+            <div class="ev-title">${escHtml(ev.title)}</div>
+            <div class="ev-location">${escHtml(ev.location_name || '')}</div>
+            <div class="ev-club">${escHtml(ev.club_name || '')}</div>
+          </div>`;
+        });
+      }
     });
 
     html += `</div></div>`;
@@ -285,7 +401,34 @@ async function renderCalendar() {
 
   // Event block click → modal
   grid.querySelectorAll('.cal-event').forEach(el => {
-    el.addEventListener('click', () => openEventModal(el.dataset.evId, events));
+    el.addEventListener('click', (e) => {
+      // If clicked on nav buttons, ignore opening modal
+      const target = e.target;
+      if (target && (target.dataset.clusterPrev || target.dataset.clusterNext)) return;
+      openEventModal(el.dataset.evId, events);
+    });
+  });
+
+  // Cluster nav handlers (prev/next)
+  grid.querySelectorAll('[data-cluster-prev]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      const id = btn.dataset.clusterPrev;
+      if (!id) return;
+      const idx = state._clusterIndex[id] || 0;
+      const len = (state._clusterLen && state._clusterLen[id]) || 1;
+      state._clusterIndex[id] = ((idx - 1) % len + len) % len;
+      renderCalendar();
+    });
+  });
+  grid.querySelectorAll('[data-cluster-next]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      const id = btn.dataset.clusterNext;
+      if (!id) return;
+      const idx = state._clusterIndex[id] || 0;
+      const len = (state._clusterLen && state._clusterLen[id]) || 1;
+      state._clusterIndex[id] = (idx + 1) % len;
+      renderCalendar();
+    });
   });
 
   // On first render, try to scroll so the current time is visible.
@@ -335,8 +478,8 @@ function openEventModal(evId, events) {
   if (!ev) return;
 
   const modal = new bootstrap.Modal(document.getElementById('eventModal'));
-  const start = new Date(ev.start_datetime);
-  const end   = new Date(ev.end_datetime);
+  const start = parseLocalISO(ev.start_datetime);
+  const end   = parseLocalISO(ev.end_datetime);
 
   document.getElementById('eventModalLabel').textContent = ev.title;
   document.getElementById('event-modal-title').textContent = ev.title;
@@ -400,43 +543,64 @@ function debounce(fn, ms) {
 /* =============================================================
    CLUBS PAGE
    ============================================================= */
-async function loadClubs() {
-  const grid = document.getElementById('clubs-grid');
+async function loadDepartmentsPage() {
+  const grid = document.getElementById('departments-grid');
   grid.innerHTML = `<div class="text-center text-muted py-5 col-12">
-    <i class="fa-solid fa-spinner fa-spin fa-2x mb-2"></i><p>Loading clubs…</p></div>`;
+    <i class="fa-solid fa-spinner fa-spin fa-2x mb-2"></i><p>Loading departments…</p></div>`;
 
-  const { ok, data } = await apiFetch('/api/clubs');
-  state.clubs = ok ? (data.clubs || []) : [];
-  renderClubsGrid(state.clubs);
+  // Fetch departments and render
+  await loadDepartments();
+  renderDepartmentsGrid(state.departments);
 }
 
-function renderClubsGrid(clubs) {
-  const grid = document.getElementById('clubs-grid');
-  const count = document.getElementById('clubs-count');
+async function loadDepartments() {
+  const { ok, data } = await apiFetch('/api/departments');
+  const depts = ok ? (data.departments || []) : [];
+  state.departments = depts;
+  state.clubs = depts; // keep alias for compatibility
+  // assign colors
+  state.departmentColors = assignDepartmentColors(depts);
 
-  if (!clubs.length) {
+  // Populate department select in calendar header
+  const sel = document.getElementById('dept-select');
+  if (sel) {
+    const opts = ['<option value="">All Departments</option>']
+      .concat(depts.map(d => `<option value="${d.id}">${escHtml(d.name)}</option>`));
+    sel.innerHTML = opts.join('');
+    sel.addEventListener('change', () => {
+      state.selectedDepartmentId = sel.value ? parseInt(sel.value) : null;
+      // re-render calendar for the selected department
+      if (state.currentPage === 'home') renderCalendar();
+    });
+  }
+}
+
+function renderDepartmentsGrid(departments) {
+  const grid = document.getElementById('departments-grid');
+  const count = document.getElementById('departments-count');
+
+  if (!departments.length) {
     grid.innerHTML = `<div class="text-center text-muted py-5 col-12">
       <i class="fa-solid fa-face-sad-tear fa-2x mb-2"></i>
-      <p>No clubs found.</p></div>`;
+      <p>No departments found.</p></div>`;
     count.textContent = '';
     return;
   }
 
-  count.textContent = `${clubs.length} club${clubs.length !== 1 ? 's' : ''}`;
+  count.textContent = `${departments.length} department${departments.length !== 1 ? 's' : ''}`;
 
-  grid.innerHTML = clubs.map(club => {
-    // Use a Font Awesome icon + club initial instead of storing a logo
-    const logoHtml = `<div class="club-logo-placeholder"><i class="fa-solid fa-user-group"></i><span>${escHtml(club.name.charAt(0).toUpperCase())}</span></div>`;
-    return `<div class="club-tile" data-club-id="${club.id}" data-club-name="${escHtml(club.name)}"
-                 tabindex="0" role="button" aria-label="Login as ${escHtml(club.name)}">
+  grid.innerHTML = departments.map(dept => {
+    const logoHtml = `<div class="club-logo-placeholder"><i class="fa-solid fa-user-group"></i><span>${escHtml(dept.name.charAt(0).toUpperCase())}</span></div>`;
+    return `<div class="club-tile" data-department-id="${dept.id}" data-department-name="${escHtml(dept.name)}"
+                 tabindex="0" role="button" aria-label="Login as department ${escHtml(dept.name)}">
       ${logoHtml}
-      <div class="club-name">${escHtml(club.name)}</div>
+      <div class="club-name">${escHtml(dept.name)}</div>
     </div>`;
   }).join('');
 
   grid.querySelectorAll('.club-tile').forEach(tile => {
-    tile.addEventListener('click', () => openClubLoginModal(
-      parseInt(tile.dataset.clubId), tile.dataset.clubName
+    tile.addEventListener('click', () => openDepartmentLoginModal(
+      parseInt(tile.dataset.departmentId), tile.dataset.departmentName
     ));
     tile.addEventListener('keydown', e => {
       if (e.key === 'Enter' || e.key === ' ') tile.click();
@@ -445,18 +609,18 @@ function renderClubsGrid(clubs) {
 }
 
 // Club search/filter
-document.getElementById('club-search').addEventListener('input', function () {
+document.getElementById('department-search').addEventListener('input', function () {
   const q = this.value.trim().toLowerCase();
-  const filtered = q ? state.clubs.filter(c => c.name.toLowerCase().includes(q)) : state.clubs;
-  renderClubsGrid(filtered);
+  const filtered = q ? state.departments.filter(c => c.name.toLowerCase().includes(q)) : state.departments;
+  renderDepartmentsGrid(filtered);
 });
 
-function openClubLoginModal(clubId, clubName) {
-  state.pendingLoginClub = { id: clubId, name: clubName };
+function openDepartmentLoginModal(deptId, deptName) {
+  state.pendingLoginClub = { id: deptId, name: deptName };
   document.getElementById('clubLoginModalLabel').innerHTML =
-    `<i class="fa-solid fa-lock me-2 text-primary"></i>Login – ${escHtml(clubName)}`;
+    `<i class="fa-solid fa-lock me-2 text-primary"></i>Login – ${escHtml(deptName)}`;
   document.getElementById('club-modal-name').textContent =
-    `Enter the password for ${clubName} to post events.`;
+    `Enter the password for ${deptName} to post events.`;
   document.getElementById('club-login-pw').value = '';
   hideAlert('club-login-msg');
   const modal = new bootstrap.Modal(document.getElementById('clubLoginModal'));
@@ -471,9 +635,9 @@ document.getElementById('club-login-form').addEventListener('submit', async func
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner-sm"></span> Logging in…';
 
-  const { ok, data } = await apiFetch('/api/auth/club', {
+  const { ok, data } = await apiFetch('/api/auth/department', {
     method: 'POST',
-    body: JSON.stringify({ club_id: state.pendingLoginClub.id, password: pw }),
+    body: JSON.stringify({ department_id: state.pendingLoginClub.id, password: pw }),
   });
 
   btn.disabled = false;
@@ -484,17 +648,37 @@ document.getElementById('club-login-form').addEventListener('submit', async func
     return;
   }
 
-  // Store session
-  state.loggedInClub = { ...data.club, token: data.token };
+  // Store session. API may return `department` (new name) or `club` for legacy.
+  const dept = data.department || data.club || null;
+  state.loggedInClub = dept ? { ...dept, token: data.token } : { token: data.token };
   bootstrap.Modal.getInstance(document.getElementById('clubLoginModal')).hide();
   onClubLogin();
 });
 
 function onClubLogin() {
   const banner = document.getElementById('club-login-banner');
-  document.getElementById('logged-club-name').textContent = state.loggedInClub.name;
+  // Show the logged-in department name if available
+  document.getElementById('logged-club-name').textContent = state.loggedInClub?.name || '–';
   banner.classList.remove('d-none');
   document.getElementById('create-event-section').classList.remove('d-none');
+  // If logged in as a department, restrict the departments grid to show only that department
+  try {
+    if (state.loggedInClub && state.loggedInClub.id) {
+      renderDepartmentsGrid([ { id: state.loggedInClub.id, name: state.loggedInClub.name } ]);
+      const sel = document.getElementById('dept-select');
+      if (sel) {
+        sel.value = String(state.loggedInClub.id);
+        sel.disabled = true;
+      }
+    }
+  } catch (e) {
+    // ignore rendering errors
+  }
+  // Hide the department filter and the full grid while logged in
+  const filterBar = document.querySelector('.clubs-filter');
+  const gridEl = document.getElementById('departments-grid');
+  if (filterBar) filterBar.classList.add('d-none');
+  if (gridEl) gridEl.classList.add('d-none');
   // Populate locations for club create-event form
   (async () => {
     try {
@@ -514,6 +698,25 @@ document.getElementById('btn-club-logout').addEventListener('click', () => {
   state.loggedInClub = null;
   document.getElementById('club-login-banner').classList.add('d-none');
   document.getElementById('create-event-section').classList.add('d-none');
+  // Restore full departments list and re-enable the select
+  (async () => {
+    try {
+      await loadDepartments();
+      renderDepartmentsGrid(state.departments);
+      const sel = document.getElementById('dept-select');
+      if (sel) {
+        sel.disabled = false;
+        sel.value = '';
+      }
+    } catch (e) {
+      // ignore
+    }
+  })();
+  // Show the department filter and grid again after logout
+  const filterBar = document.querySelector('.clubs-filter');
+  const gridEl = document.getElementById('departments-grid');
+  if (filterBar) filterBar.classList.remove('d-none');
+  if (gridEl) gridEl.classList.remove('d-none');
 });
 
 document.getElementById('btn-change-pw').addEventListener('click', () => {
@@ -578,6 +781,7 @@ document.getElementById('create-event-form').addEventListener('submit', async fu
     title:          document.getElementById('ev-title').value.trim(),
     description:    document.getElementById('ev-desc').value.trim(),
     location_id,
+    event_type:     document.getElementById('ev-type')?.value || null,
     start_datetime: document.getElementById('ev-start').value,
     end_datetime:   document.getElementById('ev-end').value,
   };
@@ -643,11 +847,11 @@ document.getElementById('btn-admin-logout').addEventListener('click', () => {
 
 async function loadAdminData() {
   // Load clubs for the dropdown + clubs list
-  const { ok, data } = await apiFetch('/api/clubs');
-  const clubs = ok ? (data.clubs || []) : [];
+  const { ok, data } = await apiFetch('/api/departments');
+  const clubs = ok ? (data.departments || []) : [];
 
   // Populate club select
-  const sel = document.getElementById('adm-ev-club');
+  const sel = document.getElementById('adm-ev-department');
   sel.innerHTML = `<option value="">– select club –</option>` +
     clubs.map(c => `<option value="${c.id}">${escHtml(c.name)}</option>`).join('');
 
@@ -664,7 +868,7 @@ async function loadAdminData() {
   }
 
   // Clubs list – use event delegation instead of inline onclick
-  const clList = document.getElementById('admin-clubs-list');
+  const clList = document.getElementById('admin-departments-list');
   if (clubs.length) {
     clList.innerHTML = clubs.map(c => `
       <div class="event-list-item">
@@ -672,16 +876,22 @@ async function loadAdminData() {
           <div class="ev-title-txt">${escHtml(c.name)}</div>
           <div class="ev-meta-txt">ID: ${c.id} · Created: ${new Date(c.created_at).toLocaleDateString()}</div>
         </div>
-        <button class="btn btn-sm btn-outline-danger" data-delete-club="${c.id}">
-          <i class="fa-solid fa-trash"></i>
-        </button>
+        <div class="btn-group">
+          <button class="btn btn-sm btn-outline-secondary" data-change-pw-dept="${c.id}">Change PW</button>
+          <button class="btn btn-sm btn-outline-danger" data-delete-department="${c.id}">
+            <i class="fa-solid fa-trash"></i>
+          </button>
+        </div>
       </div>`).join('');
 
-    clList.querySelectorAll('[data-delete-club]').forEach(btn => {
-      btn.addEventListener('click', () => adminDeleteClub(parseInt(btn.dataset.deleteClub)));
+    clList.querySelectorAll('[data-delete-department]').forEach(btn => {
+      btn.addEventListener('click', () => adminDeleteDepartment(parseInt(btn.dataset.deleteDepartment)));
+    });
+    clList.querySelectorAll('[data-change-pw-dept]').forEach(btn => {
+      btn.addEventListener('click', () => adminChangeDepartmentPassword(parseInt(btn.dataset.changePwDept)));
     });
   } else {
-    clList.innerHTML = '<p class="text-muted small">No clubs yet.</p>';
+    clList.innerHTML = '<p class="text-muted small">No departments yet.</p>';
   }
 
   // Events list
@@ -699,7 +909,7 @@ async function loadAdminEvents() {
       <div class="event-list-item">
         <div class="ev-info">
           <div class="ev-title-txt">${escHtml(ev.title)}</div>
-          <div class="ev-meta-txt">${escHtml(ev.club_name)} · ${new Date(ev.start_datetime).toLocaleString()}</div>
+          <div class="ev-meta-txt">${escHtml(ev.club_name)} · ${escHtml(parseLocalISO(ev.start_datetime).toLocaleString())}</div>
         </div>
         <button class="btn btn-sm btn-outline-danger" data-delete-event="${ev.id}">
           <i class="fa-solid fa-trash"></i>
@@ -715,13 +925,13 @@ async function loadAdminEvents() {
 }
 
 // Create club (admin)
-document.getElementById('create-club-form').addEventListener('submit', async function (e) {
+document.getElementById('create-department-form').addEventListener('submit', async function (e) {
   e.preventDefault();
-  hideAlert('create-club-msg');
+  hideAlert('create-department-msg');
   const btn = this.querySelector('button[type=submit]');
   btn.disabled = true; btn.innerHTML = '<span class="spinner-sm"></span>';
 
-  const { ok, data } = await apiFetch('/api/clubs', {
+  const { ok, data } = await apiFetch('/api/departments', {
     method: 'POST',
     body: JSON.stringify({
       name:     document.getElementById('cl-name').value.trim(),
@@ -729,10 +939,10 @@ document.getElementById('create-club-form').addEventListener('submit', async fun
     }),
   });
 
-  btn.disabled = false; btn.innerHTML = '<i class="fa-solid fa-plus me-1"></i>Create Club';
+  btn.disabled = false; btn.innerHTML = '<i class="fa-solid fa-plus me-1"></i>Create Department';
 
-  if (!ok) { showAlert('create-club-msg', data.error || 'Failed to create club'); return; }
-  showAlert('create-club-msg', 'Club created!', 'success');
+  if (!ok) { showAlert('create-department-msg', data.error || 'Failed to create department'); return; }
+  showAlert('create-department-msg', 'Department created!', 'success');
   this.reset();
   loadAdminData();
 });
@@ -762,10 +972,11 @@ document.getElementById('admin-create-event-form').addEventListener('submit', as
   const { ok, data } = await apiFetch('/api/events', {
     method: 'POST',
     body: JSON.stringify({
-      club_id:        parseInt(document.getElementById('adm-ev-club').value),
+  department_id:        parseInt(document.getElementById('adm-ev-department').value),
       title:          document.getElementById('adm-ev-title').value.trim(),
       description:    document.getElementById('adm-ev-desc').value.trim(),
       location_id,
+      event_type:     document.getElementById('adm-ev-type')?.value || null,
       start_datetime: document.getElementById('adm-ev-start').value,
       end_datetime:   document.getElementById('adm-ev-end').value,
     }),
@@ -780,11 +991,22 @@ document.getElementById('admin-create-event-form').addEventListener('submit', as
 });
 
 // Delete club (no longer needs to be on window – called via event delegation)
-async function adminDeleteClub(id) {
-  if (!confirm('Delete this club and all its events?')) return;
-  const { ok, data } = await apiFetch(`/api/clubs/${id}`, { method: 'DELETE' });
-  if (!ok) { alert(data.error || 'Failed to delete club'); return; }
+async function adminDeleteDepartment(id) {
+  if (!confirm('Delete this department and all its events?')) return;
+  const { ok, data } = await apiFetch(`/api/departments/${id}`, { method: 'DELETE' });
+  if (!ok) { alert(data.error || 'Failed to delete department'); return; }
   loadAdminData();
+}
+
+async function adminChangeDepartmentPassword(id) {
+  const pw = prompt('Enter a new password for this department (min 6 characters):');
+  if (!pw || pw.length < 6) { alert('Password must be at least 6 characters'); return; }
+  const { ok, data } = await apiFetch(`/api/departments/${id}/password`, {
+    method: 'POST',
+    body: JSON.stringify({ password: pw }),
+  });
+  if (!ok) { alert(data.error || 'Failed to change password'); return; }
+  alert('Password changed successfully');
 }
 
 // Delete event
@@ -798,4 +1020,5 @@ async function adminDeleteEvent(id) {
 /* =============================================================
    INIT
    ============================================================= */
-navigate('home');
+// Load departments and then navigate to home so the header select is populated immediately
+loadDepartments().then(() => navigate('home')).catch(() => navigate('home'));

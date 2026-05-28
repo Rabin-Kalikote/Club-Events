@@ -28,8 +28,8 @@ A full-stack web application for discovering and managing club events at the Col
  - Event blocks show title and organizing club; click to open a detail modal with event details and location
 - Navigate by day or week; jump back to "Today" at any time
 
-### Clubs
-- Grid of all registered clubs with logos and names
+### Departments
+- Grid of all registered departments with icons and names
 - Live filter/search bar
 - Click any club tile to log in with the club password
  - After login: create new events (title, description, location, start/end datetime)
@@ -37,7 +37,7 @@ A full-stack web application for discovering and managing club events at the Col
 
 ### Senate (Admin)
 - Admin login (default password set via `ADMIN_PASSWORD` environment variable)
- - Create new clubs (name, default password) — club logos are represented by icons
+ - Create new departments (name, default password) — department icons represent each department
 - Create events on behalf of any club
 - Delete clubs and events
 
@@ -59,8 +59,8 @@ Club-Events/
 │   │   ├── _middleware.js    # CORS + JWT auth middleware
 │   │   ├── events.js         # GET/POST /api/events
 │   │   ├── events/[id].js    # GET/PUT/DELETE /api/events/:id
-│   │   ├── clubs.js          # GET/POST /api/clubs
-│   │   ├── clubs/[id].js     # GET/PUT/DELETE /api/clubs/:id
+│   │   ├── departments.js          # GET/POST /api/departments
+│   │   ├── departments/[id].js     # GET/PUT/DELETE /api/departments/:id
 │   │   ├── auth/
 │   │   │   ├── club.js            # POST /api/auth/club
 │   │   │   ├── admin.js           # POST /api/auth/admin

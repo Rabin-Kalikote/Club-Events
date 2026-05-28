@@ -20,7 +20,8 @@ export async function onRequestGet({ env }) {
 
 export async function onRequestPost({ env, request, data }) {
   const user = data?.user;
-  if (!user || (user.type !== 'club' && user.type !== 'admin')) {
+  // Accept legacy 'club', new 'department', and 'admin'
+  if (!user || (user.type !== 'club' && user.type !== 'department' && user.type !== 'admin')) {
     return json({ error: 'Unauthorized' }, 401);
   }
 

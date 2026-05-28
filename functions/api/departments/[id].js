@@ -1,7 +1,7 @@
 /**
- * GET    /api/clubs/:id  – get a single club (public, no password hash returned)
- * PUT    /api/clubs/:id  – update a club (requires owner club or admin)
- * DELETE /api/clubs/:id  – delete a club (requires admin)
+ * GET    /api/departments/:id  – get a single department (public)
+ * PUT    /api/departments/:id  – update a department (requires owner department or admin)
+ * DELETE /api/departments/:id  – delete a department (requires admin)
  */
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -13,13 +13,11 @@ function json(data, status = 200) {
 export async function onRequestGet({ env, params }) {
   const { id } = params;
   try {
-    // Read from departments for backward compatibility
-    const result = await env.DB.prepare(
+    const dept = await env.DB.prepare(
       `SELECT id, name, created_at FROM departments WHERE id = ?`
     ).bind(id).first();
-    if (!result) return json({ error: 'Not found' }, 404);
-    // Return as 'club' for compatibility
-    return json({ club: result });
+    if (!dept) return json({ error: 'Department not found' }, 404);
+    return json({ department: dept });
   } catch (err) {
     return json({ error: err.message }, 500);
   }
@@ -39,10 +37,10 @@ export async function onRequestPut({ env, request, params, data }) {
 
   const { name } = body;
   try {
-    const result = await env.DB.prepare(
-      `UPDATE departments SET name = ? WHERE id = ?`
+    await env.DB.prepare(
+      `UPDATE departments SET name=COALESCE(?,name) WHERE id=?`
     ).bind(name || null, id).run();
-    return json({ message: 'Updated' });
+    return json({ message: 'Department updated' });
   } catch (err) {
     return json({ error: err.message }, 500);
   }
@@ -54,10 +52,8 @@ export async function onRequestDelete({ env, params, data }) {
 
   const { id } = params;
   try {
-    const result = await env.DB.prepare(
-      `DELETE FROM departments WHERE id = ?`
-    ).bind(id).run();
-    return json({ message: 'Deleted' });
+    await env.DB.prepare('DELETE FROM departments WHERE id = ?').bind(id).run();
+    return json({ message: 'Department deleted' });
   } catch (err) {
     return json({ error: err.message }, 500);
   }

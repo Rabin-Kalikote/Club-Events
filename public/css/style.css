@@ -227,7 +227,18 @@ body {
   color: var(--color-surface);
   border-color: var(--coi-blue);
 }
-.view-toggle { display: flex; gap: 4px; }
+.view-toggle { display: inline-flex; gap: 8px; align-items: center; }
+
+/* Make the department select and view-toggle-buttons sit inline */
+.view-toggle #dept-select { display: inline-flex; vertical-align: middle; }
+.view-toggle .view-toggle-buttons { display: inline-flex; gap: 6px; vertical-align: middle; }
+
+/* Hide the week/day toggle buttons on very narrow phones, but keep the department dropdown visible */
+@media (max-width: 480px) {
+  .view-toggle .view-toggle-buttons { display: none; }
+  /* ensure select still fits on small screens */
+  .view-toggle #dept-select { min-width: 120px; }
+}
 
 /* Time grid */
 .calendar-grid-wrap {
@@ -389,6 +400,58 @@ body {
 .cal-event .ev-club  { opacity: .85; font-size: .66rem; }
 .cal-event .ev-location { opacity: .9; font-size: .68rem; margin-top: 2px; }
 
+/* Inline carousel nav (for overlapping clusters) */
+.cal-event .ev-nav {
+  position: absolute;
+  bottom: 6px;
+  right: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  z-index: 10;
+  background: rgba(0,0,0,0.08);
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+.cal-event .ev-nav button {
+  background: rgba(255,255,255,.18);
+  border: 0;
+  color: #fff;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+.cal-event .ev-nav button:focus { outline: 2px solid rgba(255,255,255,.35); }
+.cal-event .ev-nav .ev-nav-counter {
+  font-size: 11px;
+  color: rgba(255,255,255,.95);
+  font-weight: 700;
+}
+
+/* '+N more' overlay shown when we collapse many events into one slot */
+.cal-event .more-overlay {
+  position: absolute;
+  bottom: 6px;
+  right: 6px;
+  background: rgba(0,0,0,.18);
+  color: #fff;
+  padding: 3px 8px;
+  border-radius: 12px;
+  font-size: 12px;
+}
+
+@media (max-width: 768px) {
+  .cal-event .ev-nav button { width: 30px; height: 30px; font-size: 14px; }
+  .cal-event .ev-nav { top: 8px; right: 8px; }
+}
+
 /* ===================================================
    CLUBS PAGE
    =================================================== */
@@ -511,8 +574,8 @@ body {
    SENATE PAGE
    =================================================== */
 .senate-login-card {
-  max-width: 420px;
-  margin: 40px auto;
+  max-width: 570px;
+  margin: 200px auto;
   background: var(--color-surface);
   border-radius: 16px;
   padding: 32px;
@@ -712,5 +775,7 @@ body {
   .clubs-filter input { width: 100%; }
   /* Hide calendar title and view toggle on small phones */
   #cal-title { display: none !important; }
-  .view-toggle { display: none !important; }
+  /* Keep the view-toggle container visible so the department select is always accessible.
+     Only hide the week/day buttons on phones. */
+  .view-toggle .view-toggle-buttons { display: none !important; }
 }

@@ -15,19 +15,29 @@ export async function onRequestGet({ env, request }) {
   const end   = url.searchParams.get('end');
 
   let query = `
-    SELECT e.*, c.name AS club_name, l.name AS location_name
+    SELECT e.*, d.name AS club_name, d.name AS department_name, l.name AS location_name
     FROM events e
-    JOIN clubs c ON e.club_id = c.id
+    JOIN departments d ON e.department_id = d.id
     LEFT JOIN locations l ON e.location_id = l.id
   `;
   const params = [];
 
+  // Date range filter
   if (start && end) {
     query += ` WHERE e.start_datetime >= ? AND e.start_datetime <= ?`;
     params.push(start, end);
   } else if (start) {
     query += ` WHERE e.start_datetime >= ?`;
     params.push(start);
+  }
+
+  // Optional department/club filter (accept either param for compatibility)
+  const clubId = url.searchParams.get('club_id');
+  const deptId = url.searchParams.get('department_id');
+  if (clubId || deptId) {
+    const idVal = clubId || deptId;
+    query += params.length ? ` AND e.department_id = ?` : ` WHERE e.department_id = ?`;
+    params.push(idVal);
   }
 
   query += ` ORDER BY e.start_datetime ASC`;
@@ -42,7 +52,8 @@ export async function onRequestGet({ env, request }) {
 
 export async function onRequestPost({ env, request, data }) {
   const user = data?.user;
-  if (!user || (user.type !== 'club' && user.type !== 'admin')) {
+  // Accept legacy 'club', new 'department', and 'admin'
+  if (!user || (user.type !== 'club' && user.type !== 'department' && user.type !== 'admin')) {
     return json({ error: 'Unauthorized' }, 401);
   }
 
@@ -53,22 +64,25 @@ export async function onRequestPost({ env, request, data }) {
     return json({ error: 'Invalid JSON body' }, 400);
   }
 
-  const { title, description, location_id, start_datetime, end_datetime } = body;
+  const { title, description, location_id, start_datetime, end_datetime, event_type } = body;
   if (!title || !start_datetime || !end_datetime) {
     return json({ error: 'title, start_datetime, and end_datetime are required' }, 400);
   }
 
-  // Admin can specify any club_id; club users use their own club_id
-  const club_id = user.type === 'admin' ? (body.club_id || 0) : user.club_id;
-  if (!club_id) {
-    return json({ error: 'club_id is required' }, 400);
+  // Admin can specify any department via club_id (backwards compatible) or department_id.
+  // Department (club) users use their own club_id as department_id.
+  const department_id = user.type === 'admin'
+    ? (body.department_id || body.club_id || 0)
+    : (user.department_id || user.department_id || user.club_id);
+  if (!department_id) {
+    return json({ error: 'department_id (or club_id) is required' }, 400);
   }
 
   try {
     const result = await env.DB.prepare(
-      `INSERT INTO events (title, description, location_id, start_datetime, end_datetime, club_id)
-       VALUES (?, ?, ?, ?, ?, ?)`
-    ).bind(title, description || '', location_id || null, start_datetime, end_datetime, club_id).run();
+      `INSERT INTO events (title, description, location_id, start_datetime, end_datetime, department_id, event_type)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).bind(title, description || '', location_id || null, start_datetime, end_datetime, department_id, event_type || null).run();
 
     return json({ id: result.meta.last_row_id, message: 'Event created' }, 201);
   } catch (err) {

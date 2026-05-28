@@ -14,8 +14,9 @@ function json(data, status = 200) {
 
 export async function onRequestPost({ env, request, data }) {
   const user = data?.user;
-  if (!user || user.type !== 'club') {
-    return json({ error: 'Unauthorized – club login required' }, 401);
+  // Accept department user type for department-level password change
+  if (!user || (user.type !== 'club' && user.type !== 'department')) {
+    return json({ error: 'Unauthorized – department login required' }, 401);
   }
 
   let body;
@@ -30,21 +31,22 @@ export async function onRequestPost({ env, request, data }) {
   }
 
   try {
-    const club = await env.DB.prepare(
-      'SELECT password_hash, salt FROM clubs WHERE id = ?'
-    ).bind(user.club_id).first();
+    const id = user.department_id || user.club_id;
+    const dept = await env.DB.prepare(
+      'SELECT password_hash, salt FROM departments WHERE id = ?'
+    ).bind(id).first();
 
-    if (!club) return json({ error: 'Club not found' }, 404);
+    if (!dept) return json({ error: 'Department not found' }, 404);
 
-    const valid = await verifyPassword(current_password, club.password_hash, club.salt);
+    const valid = await verifyPassword(current_password, dept.password_hash, dept.salt);
     if (!valid) return json({ error: 'Current password is incorrect' }, 401);
 
     const newSalt = generateSalt();
     const newHash = await hashPassword(new_password, newSalt);
 
     await env.DB.prepare(
-      'UPDATE clubs SET password_hash = ?, salt = ? WHERE id = ?'
-    ).bind(newHash, newSalt, user.club_id).run();
+      'UPDATE departments SET password_hash = ?, salt = ? WHERE id = ?'
+    ).bind(newHash, newSalt, id).run();
 
     return json({ message: 'Password changed successfully' });
   } catch (err) {

@@ -1,6 +1,6 @@
 /**
- * GET  /api/clubs        – list all clubs
- * POST /api/clubs        – create a new club (requires admin auth)
+ * GET  /api/departments        – list all departments
+ * POST /api/departments        – create a new department (requires admin auth)
  */
 import { generateSalt, hashPassword } from '../utils/crypto.js';
 
@@ -16,8 +16,7 @@ export async function onRequestGet({ env }) {
     const result = await env.DB.prepare(
       `SELECT id, name, created_at FROM departments ORDER BY name ASC`
     ).all();
-    // Return as 'clubs' for API compatibility (frontend still expects clubs)
-    return json({ clubs: result.results });
+    return json({ departments: result.results });
   } catch (err) {
     return json({ error: err.message }, 500);
   }
@@ -47,7 +46,7 @@ export async function onRequestPost({ env, request, data }) {
     return json({ id: result.meta.last_row_id, message: 'Department created' }, 201);
   } catch (err) {
     if (err.message.includes('UNIQUE')) {
-      return json({ error: 'A club with that name already exists' }, 409);
+      return json({ error: 'A department with that name already exists' }, 409);
     }
     return json({ error: err.message }, 500);
   }
